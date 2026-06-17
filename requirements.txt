@@ -1,7 +1,9 @@
 langchain
 langchain-community
-langchain-ollama
 langchain-chroma
+langchain-groq
+langchain-huggingface
+sentence-transformers
 pypdf
 gradio
 python-dotenv
