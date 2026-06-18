@@ -11,7 +11,7 @@ from config import *
 embeddings = HuggingFaceEmbeddings(
     model_name="all-MiniLM-L6-v2",
     model_kwargs={"device": "cpu"},
-    encode_kwargs={"normalize_embeddings": False}
+    encode_kwargs={"normalize_embeddings": True}   # Improved
 )
 
 llm = ChatGroq(
@@ -20,35 +20,52 @@ llm = ChatGroq(
     temperature=0.2,
 )
 
-vectorstore = None
-qa_chain = None
-retriever = None
-chat_history = []
+# ====================== Upload & Embed ======================
+def upload_pdfs(files, current_vectorstore, current_retriever):
+    if not files:
+        return "No files uploaded.", current_vectorstore, current_retriever
 
-def initialize_vector_store(new_splits):
-    global vectorstore, retriever
+    all_splits = []
+    for file in files:
+        try:
+            loader = PyPDFLoader(file)
+            docs = loader.load()
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=CHUNK_SIZE,
+                chunk_overlap=CHUNK_OVERLAP
+            )
+            splits = text_splitter.split_documents(docs)
+            all_splits.extend(splits)
+            print(f"Loaded {len(splits)} chunks from {file}")
+        except Exception as e:
+            return f"Error processing file: {str(e)}", current_vectorstore, current_retriever
 
+    if not all_splits:
+        return "No readable content found in uploaded PDFs.", current_vectorstore, current_retriever
+
+    # Create fresh vectorstore for this session
     vectorstore = Chroma.from_documents(
-        documents=new_splits,
+        documents=all_splits,
         embedding=embeddings
     )
     retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
 
+    return f"Done. {len(all_splits)} chunks embedded. You can now ask questions.", vectorstore, retriever
 
-def chat(message, history):
-    global retriever, chat_history
 
-    if retriever is None:
+# ====================== Chat ======================
+def chat(message, history, vectorstore_state, retriever_state):
+    if retriever_state is None:
         return "Please upload at least one PDF first."
 
     try:
         # Build context from retrieved docs
-        docs = retriever.invoke(message)
+        docs = retriever_state.invoke(message)
         context = "\n\n".join(doc.page_content for doc in docs)
 
         # Build chat history string
         history_text = ""
-        for human, assistant in chat_history[-3:]:  # last 3 turns only
+        for human, assistant in history[-3:]:  # last 3 turns only
             history_text += f"Human: {human}\nAssistant: {assistant}\n"
 
         template = f"""Answer the question based only on the following context.
@@ -62,9 +79,6 @@ Human: {message}
 Assistant:"""
 
         response = llm.invoke(template).content
-
-        # Update memory
-        chat_history.append((message, response))
 
         # Sources
         unique_sources = set()
@@ -80,32 +94,6 @@ Assistant:"""
         print(f"Error: {str(e)}")
         return f"Error: {str(e)}"
 
-
-# ====================== Upload & Embed ======================
-def upload_pdfs(files):
-    if not files:
-        return "No files uploaded."
-
-    all_splits = []
-    for file in files:
-        try:
-            loader = PyPDFLoader(file)
-            docs = loader.load()
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=CHUNK_SIZE,
-                chunk_overlap=CHUNK_OVERLAP
-            )
-            splits = text_splitter.split_documents(docs)
-            all_splits.extend(splits)
-            print(f"Loaded {len(splits)} chunks from {file}")
-        except Exception as e:
-            return f"Error processing file: {str(e)}"
-
-    if not all_splits:
-        return "No readable content found in uploaded PDFs."
-
-    initialize_vector_store(all_splits)
-    return f"Done. {len(all_splits)} chunks embedded. You can now ask questions."
 
 # ====================== Main ======================
 if __name__ == "__main__":
@@ -126,16 +114,22 @@ if __name__ == "__main__":
             )
 
         upload_btn = gr.Button("Upload & Embed PDFs", variant="primary")
+        
+        # Session states
+        vectorstore_state = gr.State(None)
+        retriever_state = gr.State(None)
+
         upload_btn.click(
             fn=upload_pdfs,
-            inputs=file_input,
-            outputs=upload_status
+            inputs=[file_input, vectorstore_state, retriever_state],
+            outputs=[upload_status, vectorstore_state, retriever_state]
         )
 
         gr.Markdown("---")
 
         gr.ChatInterface(
             fn=chat,
+            additional_inputs=[vectorstore_state, retriever_state],
             title="Chat with your Documents",
             description="Ask follow-up questions freely, the chatbot remembers the conversation.",
         )
