@@ -5,6 +5,4 @@ langchain-groq
 langchain-huggingface
 sentence-transformers
 pypdf
-gradio==4.44.0
-huggingface_hub==0.24.0
 python-dotenv
