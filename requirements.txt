@@ -6,3 +6,4 @@ langchain-huggingface
 sentence-transformers
 pypdf
 python-dotenv
+gradio>=5.9.0
