@@ -5,7 +5,6 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_groq import ChatGroq
 from langchain_chroma import Chroma
 import gradio as gr
-import shutil
 from config import *
 
 # ====================== CONFIG ======================
@@ -23,17 +22,6 @@ llm = ChatGroq(
 
 vectorstore = None
 qa_chain = None
-
-
-# ====================== Reset Vector Store on Startup ======================
-def reset_vector_store():
-    if os.path.exists(VECTOR_STORE_PATH):
-        shutil.rmtree(VECTOR_STORE_PATH)
-    os.makedirs(VECTOR_STORE_PATH, exist_ok=True)
-    print("Vector store reset.")
-
-
-vectorstore = None
 retriever = None
 chat_history = []
 
@@ -42,8 +30,7 @@ def initialize_vector_store(new_splits):
 
     vectorstore = Chroma.from_documents(
         documents=new_splits,
-        embedding=embeddings,
-        persist_directory=VECTOR_STORE_PATH
+        embedding=embeddings
     )
     retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
 
@@ -118,12 +105,10 @@ def upload_pdfs(files):
         return "No readable content found in uploaded PDFs."
 
     initialize_vector_store(all_splits)
-    return f"✅ Done. {len(all_splits)} chunks embedded. You can now ask questions."
+    return f"Done. {len(all_splits)} chunks embedded. You can now ask questions."
 
 # ====================== Main ======================
 if __name__ == "__main__":
-    reset_vector_store()  # Always reset on startup
-
     with gr.Blocks(title="Personal Knowledge Chatbot") as demo:
         gr.Markdown("# Personal Knowledge Chatbot")
         gr.Markdown("Upload your PDFs first, then ask questions. Memory is maintained across the conversation.")
