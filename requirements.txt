@@ -7,3 +7,4 @@ sentence-transformers
 pypdf
 gradio
 python-dotenv
+huggingface-hub==0.23.5
