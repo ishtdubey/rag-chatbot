@@ -4,10 +4,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_groq import ChatGroq
 from langchain_chroma import Chroma
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.output_parsers import StrOutputParser
 import gradio as gr
+import shutil
 from config import *
 
 # ====================== CONFIG ======================
@@ -24,54 +22,76 @@ llm = ChatGroq(
 )
 
 vectorstore = None
-rag_chain = None
+qa_chain = None
+
+
+# ====================== Reset Vector Store on Startup ======================
+def reset_vector_store():
+    if os.path.exists(VECTOR_STORE_PATH):
+        shutil.rmtree(VECTOR_STORE_PATH)
+    os.makedirs(VECTOR_STORE_PATH, exist_ok=True)
+    print("Vector store reset.")
+
+
+vectorstore = None
 retriever = None
+chat_history = []
 
+def initialize_vector_store(new_splits):
+    global vectorstore, retriever
 
-# ====================== Initialize / Update Vector Store ======================
-def initialize_vector_store(new_splits=None):
-    global vectorstore, rag_chain, retriever
-
-    if vectorstore is None:
-        if os.path.exists(VECTOR_STORE_PATH) and len(os.listdir(VECTOR_STORE_PATH)) > 0:
-            print("Loading existing vector store...")
-            vectorstore = Chroma(
-                persist_directory=VECTOR_STORE_PATH,
-                embedding_function=embeddings
-            )
-        else:
-            print("Creating new vector store...")
-            vectorstore = Chroma(
-                embedding_function=embeddings,
-                persist_directory=VECTOR_STORE_PATH
-            )
-
-    if new_splits:
-        print(f"Adding {len(new_splits)} new chunks...")
-        vectorstore.add_documents(new_splits)
-
+    vectorstore = Chroma.from_documents(
+        documents=new_splits,
+        embedding=embeddings,
+        persist_directory=VECTOR_STORE_PATH
+    )
     retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
 
-    template = """Answer the question based only on the following context.
+
+def chat(message, history):
+    global retriever, chat_history
+
+    if retriever is None:
+        return "Please upload at least one PDF first."
+
+    try:
+        # Build context from retrieved docs
+        docs = retriever.invoke(message)
+        context = "\n\n".join(doc.page_content for doc in docs)
+
+        # Build chat history string
+        history_text = ""
+        for human, assistant in chat_history[-3:]:  # last 3 turns only
+            history_text += f"Human: {human}\nAssistant: {assistant}\n"
+
+        template = f"""Answer the question based only on the following context.
 If you don't know the answer, say "I don't have enough information."
 
 Context: {context}
-Question: {question}
-Answer:"""
 
-    prompt = ChatPromptTemplate.from_template(template)
+Previous conversation:
+{history_text}
+Human: {message}
+Assistant:"""
 
-    def format_docs(docs):
-        return "\n\n".join(doc.page_content for doc in docs)
+        response = llm.invoke(template).content
 
-    rag_chain = (
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
+        # Update memory
+        chat_history.append((message, response))
 
-    return rag_chain, retriever
+        # Sources
+        unique_sources = set()
+        for doc in docs:
+            source = doc.metadata.get('source', 'Unknown')
+            filename = source.split('\\')[-1].split('/')[-1]
+            unique_sources.add(filename)
+
+        sources_text = "\n".join(f"• {src}" for src in list(unique_sources)[:5])
+        return response + f"\n\n**Sources:**\n{sources_text}"
+
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        return f"Error: {str(e)}"
 
 
 # ====================== Upload & Embed ======================
@@ -98,45 +118,15 @@ def upload_pdfs(files):
         return "No readable content found in uploaded PDFs."
 
     initialize_vector_store(all_splits)
-    return f"Done. {len(all_splits)} chunks embedded. You can now ask questions."
-
-
-# ====================== Chat ======================
-def chat(message, history):
-    global rag_chain, retriever
-
-    if rag_chain is None:
-        return "Please upload at least one PDF first."
-
-    try:
-        response = rag_chain.invoke(message)
-
-        docs = retriever.invoke(message)
-        unique_sources = set()
-        for doc in docs:
-            source = doc.metadata.get('source', 'Unknown')
-            filename = source.split('\\')[-1].split('/')[-1]
-            unique_sources.add(filename)
-
-        sources_text = "\n".join(f"• {src}" for src in list(unique_sources)[:5])
-        return response + f"\n\n**Sources:**\n{sources_text}"
-
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        return f"Error: {str(e)}"
-
+    return f"✅ Done. {len(all_splits)} chunks embedded. You can now ask questions."
 
 # ====================== Main ======================
 if __name__ == "__main__":
-    if os.path.exists(VECTOR_STORE_PATH) and len(os.listdir(VECTOR_STORE_PATH)) > 0:
-        print("Loading existing vector store on startup...")
-        initialize_vector_store()
-    else:
-        print("No existing vector store. Upload PDFs to get started.")
+    reset_vector_store()  # Always reset on startup
 
     with gr.Blocks(title="Personal Knowledge Chatbot") as demo:
         gr.Markdown("# Personal Knowledge Chatbot")
-        gr.Markdown("Upload your PDFs first, then ask questions about their content.")
+        gr.Markdown("Upload your PDFs first, then ask questions. Memory is maintained across the conversation.")
 
         with gr.Row():
             file_input = gr.File(
@@ -162,7 +152,7 @@ if __name__ == "__main__":
         gr.ChatInterface(
             fn=chat,
             title="Chat with your Documents",
-            description="Ask any question about your uploaded documents.",
+            description="Ask follow-up questions freely, the chatbot remembers the conversation.",
         )
 
     demo.launch(share=False)
