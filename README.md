@@ -1,3 +1,15 @@
+---
+title: Personal Knowledge Chatbot
+emoji: 📚
+colorFrom: blue
+colorTo: purple
+sdk: gradio
+sdk_version: "5.0.0"
+app_file: app.py
+pinned: false
+---
+
+
 # Personal Knowledge Chatbot
 
 A RAG chatbot that lets you chat with your own PDF documents. Built as a learning project to understand the full RAG pipeline, from document ingestion to vector retrieval to LLM response generation.
